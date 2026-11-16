@@ -136,12 +136,14 @@ async def edit_contact(cid:int,b:Contact):
         if u:query("UPDATE conversations SET stage='optout',mode='human',version=version+1 WHERE lower(username)=lower(%s)",(u,))
     audit('contact_updated',str(cid));return row
 @app.post('/api/import/preview')
-async def import_preview(file:UploadFile=File(...),group_id:int=Form(...)):
+async def import_preview(file:UploadFile=File(...),group_id:int=Form(...),txt_mode:str=Form(''),country_code:str=Form('')):
     if not query('SELECT id FROM groups WHERE id=%s',(group_id,),one=True):raise HTTPException(422,'分组不存在')
     data=await file.read(2*1024*1024+1)
     if len(data)>2*1024*1024:raise HTTPException(413,'文件最大 2 MB，每批最多 5000 行')
     try:
-        if file.filename.lower().endswith('.csv'):
+        if file.filename.lower().endswith('.txt'):
+            rows=parse_txt(data,txt_mode,country_code)
+        elif file.filename.lower().endswith('.csv'):
             rows=list(csv.DictReader(io.StringIO(data.decode('utf-8-sig'))))
         elif file.filename.lower().endswith('.xlsx'):
             with zipfile.ZipFile(io.BytesIO(data)) as z:
@@ -153,14 +155,14 @@ async def import_preview(file:UploadFile=File(...),group_id:int=Form(...)):
                 rows.append(dict(zip(headers,vals)))
                 if len(rows)>5000:break
             wb.close()
-        else:raise ValueError('仅支持 UTF-8 CSV 和 XLSX')
+        else:raise ValueError('仅支持 TXT、UTF-8 CSV 和 XLSX')
         if len(rows)>5000:raise ValueError('每批最多 5000 行')
-        valid,errors=normalize_rows(rows)
+        valid,errors=normalize_rows(rows,start_line=1 if file.filename.lower().endswith('.txt') else 2)
     except Exception as e:raise HTTPException(422,str(e)[:150] if isinstance(e,ValueError) else '文件格式无法读取')
     exists={x['phone'] for x in query('SELECT phone FROM contacts WHERE phone=ANY(%s)',([x['phone'] for x in valid],))}
     fresh=[r for r in valid if r['phone'] not in exists];token=secrets.token_urlsafe(20)
     query('INSERT INTO imports(id,rows,group_id) VALUES (%s,%s,%s)',(token,Jsonb(fresh),group_id))
-    return {'id':token,'valid':len(fresh),'duplicates':len(exists),'errors':errors[:100],'sample':fresh[:10],'note':'导入默认未获得联系许可，不自动发送'}
+    return {'id':token,'valid':len(fresh),'duplicates':len(exists),'errors':errors[:100],'error_count':len(errors),'sample':fresh[:10],'note':'导入默认未获得联系许可，不自动发送'}
 @app.post('/api/import/{token}/confirm')
 async def confirm_import(token:str):
     with db() as c:

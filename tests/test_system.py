@@ -152,3 +152,32 @@ def test_agent_stale_generation_is_discarded(client,monkeypatch):
     asyncio.run(Runtime().auto_reply(cid))
     assert not query('SELECT id FROM outbox')
     assert query('SELECT status FROM ai_runs',one=True)['status']=='cancelled'
+
+def test_txt_preview_country_mode_and_confirm(client):
+    data=b'14155550123\r\n+14155550123\r\n\r\ninvalid\r\n442079460123\r\n'
+    def preview(mode=''):
+        return client.post('/api/import/preview',data={'group_id':'1','txt_mode':mode},files={'file':('contacts.txt',data,'text/plain')})
+    assert preview().status_code==422
+    r=preview('international');assert r.status_code==200,r.text
+    d=r.json();assert d['valid']==2 and d['error_count']==2
+    assert [e['row'] for e in d['errors']]==[2,4]
+    assert d['sample'][0]['phone']=='+14155550123'
+    assert client.get('/api/contacts').json()['total']==0
+    assert client.post('/api/import/'+d['id']+'/confirm').json()['imported']==2
+    assert preview('international').json()['duplicates']==2
+
+def test_txt_encodings_and_local_numbers(client):
+    from app.core import parse_txt
+    assert parse_txt('＋'.encode('gb18030'),'international')
+    for encoding in ['utf-8-sig','utf-16','gb18030']:
+        r=client.post('/api/import/preview',data={'group_id':'1','txt_mode':'local','country_code':'44'},files={'file':('test.txt','2079460123\n'.encode(encoding))})
+        assert r.status_code==200,r.text
+        assert r.json()['sample'][0]['phone']=='+442079460123'
+    r=client.post('/api/import/preview',data={'group_id':'1','txt_mode':'local'},files={'file':('x.txt',b'2079460123')})
+    assert r.status_code==422
+    r=client.post('/api/import/preview',data={'group_id':'1'},files={'file':('x.txt',b'+14155550123\n')})
+    assert r.status_code==200 and r.json()['valid']==1
+
+def test_txt_row_limit(client):
+    r=client.post('/api/import/preview',data={'group_id':'1','txt_mode':'international'},files={'file':('x.txt',b'14155550123\n'*5001)})
+    assert r.status_code==422

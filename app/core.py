@@ -49,9 +49,9 @@ def username(s):
     if s and not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{4,31}',s): raise ValueError('Telegram 用户名格式不正确')
     return s
 
-def normalize_rows(rows):
+def normalize_rows(rows,start_line=2):
     valid=[];errors=[];seen=set()
-    for i,r in enumerate(rows,2):
+    for i,r in enumerate(rows,start_line):
         if not any(str(v or '').strip() for v in r.values()):continue
         try:
             p=phone(r.get('phone') or r.get('电话号码') or r.get('手机号'))
@@ -73,3 +73,27 @@ def recover_pending():
     query("UPDATE outbox SET status='uncertain',detail='服务重启，发送结果待核对；不会自动重发' WHERE status='sending'")
     query("UPDATE ai_runs SET status='interrupted',detail='服务重启，未自动重新生成' WHERE status='running'")
     query("UPDATE accounts SET status='offline',detail='连接服务启动，等待验证',checked_at=NULL WHERE enabled=true")
+
+
+def parse_txt(data,mode='',country_code=''):
+    if data.startswith((b'\xff\xfe',b'\xfe\xff')):
+        text=data.decode('utf-16')
+    else:
+        try:text=data.decode('utf-8-sig')
+        except UnicodeDecodeError:text=data.decode('gb18030')
+    if '\x00' in text:raise ValueError('TXT 包含不支持的字符，请另存为 UTF-8 文本')
+    if mode not in ('','international','local'):raise ValueError('请选择正确的 TXT 号码格式')
+    code=country_code.strip().lstrip('+')
+    if mode=='local' and not re.fullmatch(r'[1-9]\d{0,2}',code):raise ValueError('本地号码需指定 1 至 3 位国家区号')
+    rows=[]
+    for line in text.splitlines():
+        value=line.strip()
+        clean=re.sub(r'[\s()\-]','',value)
+        if clean and not clean.startswith(('+','00')):
+            if mode=='international':value='+'+value
+            elif mode=='local':
+                # Never guess or strip a national trunk prefix.
+                value='+'+code+value
+            elif clean.isdigit():raise ValueError('TXT 有未带 + 的号码，请明确选择是否已含国家区号')
+        rows.append({'phone':value})
+    return rows
