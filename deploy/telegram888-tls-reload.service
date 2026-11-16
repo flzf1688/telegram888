@@ -1,0 +1,6 @@
+[Unit]
+Description=Reload nginx after shared IP certificate renewal
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/nginx -t
+ExecStart=/usr/bin/systemctl reload nginx
